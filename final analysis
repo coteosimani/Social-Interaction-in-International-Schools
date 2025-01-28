@@ -1,0 +1,326 @@
+---
+title: "Social Interaction Survey Result"
+author: "Coté Osimani"
+date: "2022-11-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Loading packages
+```{r}
+library(tidyverse)
+library(countrycode)
+library(stargazer)
+library(stringr)
+library(ggplot2)
+```
+
+### Setting Working directory
+```{r}
+setwd("C:/Users/Coté Osimani/Desktop/SurveyExp")
+```
+
+### Importing the data
+```{r}
+survey <- read.csv("C:/Users/Coté Osimani/Desktop/SurveyExp/survey.csv")
+```
+
+### Cleaning the data
+```{r}
+survey_df <- survey %>%
+  select(consent = SC01,  ## Columns to keep
+        age = A401_01,
+        gender = A402,
+        nationality = A006,
+        uni = A405,
+        course = A406_01,
+        year = A408,
+        ses = A407,
+        abroad_exp = A001,
+         work_exp = A002,
+        living_sit = A004,
+        current_is_ng = A301,
+        current_is_g = A303,
+         lang_prof_0 = A003,
+        english = A003_01, 
+        german = A003_02, 
+        french = A003_03,
+        spanish = A003_04,
+        hindi = A003_05,
+        other = A003_06, 
+        lang_prof_7 = A003_06a,
+        treatment_status = RG01,
+        outcome_1 = A201_01,
+        outcome_2 = A202_01,
+        outcome_3 = A203_01,
+        outcome_4 = A204_01,
+        outcome_5 = A205_01,
+        outcome_6 = A206_01,
+        outcome_7 = A207_01,
+        outcome_8 = A208_01,
+        outcome_9 = A209_01,
+        outcome_10 = A210_01) %>%
+  filter(!row_number() %in% c(1)) %>% ## to eliminate unnecessary first row
+  filter(grepl('Yes', consent)) %>% ## to filter out people who refused to take part
+  mutate(
+          treatment_status = ifelse(treatment_status == "Control", 0, 1),## making treatment a dummy variable
+         )
+
+survey_df <- survey_df %>%
+  filter(
+    !rowSums(survey_df[,23:32] == "") > 4, ## filtering out if more than 4 outcome questions unanswered
+    ) %>% 
+  mutate(
+    german = ifelse(german == "Checked", 1, 0), ## converting German language proficiency in a dummy variable
+    abroad_exp = ifelse(abroad_exp == "Yes", 1, 0),  ## converting abroad experience in a dummy variable
+     work_exp = case_when(
+                            work_exp == "0 - 1" ~ 1,  ## converting work exp into numeric
+                             work_exp == "5+" ~ 5,
+                            TRUE ~ as.numeric(work_exp)
+                          ),
+    across(outcome_1:outcome_10, parse_number) ## removing percentage sign & converting outcome questions into numeric
+          )
+
+
+
+survey_df$outcome_1 <- survey_df$outcome_1 * 10   ## Converting non-percentage outcomes into percentage
+survey_df$outcome_7 <- survey_df$outcome_7 * 10
+survey_df$outcome_10 <- survey_df$outcome_10 * 10
+
+
+
+outcome <- select(survey_df, starts_with("outcome")) ## replacing NAs in outcomes with average of other outcome questions answered
+na_outcome <- which(is.na(outcome), arr.ind = TRUE)
+outcome[na_outcome] <- rowMeans(outcome, na.rm = TRUE)
+
+
+survey_df <- survey_df %>% ## removing old outcome columns
+  select(-starts_with("outcome"))
+
+
+survey_df_1 <- cbind(survey_df, outcome) ## attaching cleaned outcome columns to the data frame
+
+
+
+survey_df_1 <- survey_df_1 %>% 
+  mutate(
+    willingness = rowMeans(across(outcome_1:outcome_10)), ## Making a new column named willingness with average of outcome responses
+    g_non_g = case_when(
+            nationality == "Germany" ~ "german", ## making a new column that tells if an individual is a German
+            nationality == "" ~ "",
+            TRUE ~ "non-german"),
+    age = as.numeric(age),## age as numeric variable
+    lang_prof_0 = as.numeric(lang_prof_0) ## no. of languages 
+  )
+```
+
+
+### Assigning countries to regions
+```{r}
+survey_df_1 <- as.data.frame(survey_df_1)
+
+survey_df_1$region <- countrycode(sourcevar = survey_df_1[, "nationality"],
+                            origin = "country.name",
+                            destination = "region")
+unique(survey_df_1$region)
+
+table(survey_df_1$abroad_exp, survey_df_1$region)
+
+
+```
+
+### Some descriptive stats
+```{r}
+survey_df_rw <- survey_df_1 %>%
+  group_by(region, treatment_status) %>%
+  summarise(region_willingness = rowMeans(across(outcome_1:outcome_10)))
+
+
+survey_df_rw_1 <- survey_df_rw %>% ## region wise willingness
+  group_by(region, treatment_status) %>%
+  summarise(willingness_by_region = round(mean(region_willingness)))
+
+
+survey_df_g_non_g <- survey_df_1 %>%
+  group_by(g_non_g, treatment_status) %>%
+  summarise(g_ng_willingness = rowMeans(across(outcome_1:outcome_10)))
+
+
+survey_df_g_non_g_1 <- survey_df_g_non_g %>%  ## Germans, non-Germans willingness
+  group_by(g_non_g, treatment_status) %>%
+  summarise(g_ng_willingness = round(mean(g_ng_willingness)))
+```
+
+
+### Checking correlation between outcomes
+```{r}
+corr_matrix <- survey_df_1 %>%
+ select(starts_with("outcome")) %>%
+ cor(use = "pairwise.complete.obs")
+
+corr_matrix
+
+survey_df_1$treatment_status <- as.factor(survey_df_1$treatment_status)
+
+mean <- survey_df_1 %>% 
+  group_by(treatment_status) %>%
+  summarise(mean_val=mean(willingness))
+
+plot_1 <- survey_df_1 %>% 
+  ggplot( aes(x = willingness, colour = treatment_status)) +
+  geom_density(lwd = 1.2, linetype = 1) +
+  geom_vline(data = mean, aes(xintercept = mean_val, colour = treatment_status), lty = "dashed") +
+  theme_classic() +
+   labs(
+ title = "Visualising treatment effect", 
+ x = "Willingness", 
+ y = "Density",
+ colour = "Sample"
+ ) +
+  scale_colour_manual(values = c("#FBBC05", "#34A853"), labels=c('Control', 'Treatment'))
+
+plot_1
+```
+
+
+### Converting regions to dummies
+```{r}
+survey_df_2 <- survey_df_1 %>%
+  mutate(
+    value = replicate(126,1)
+  )
+
+
+
+survey_df_2 <- survey_df_2 %>%
+  pivot_wider(names_from = region,
+              values_from = value
+              ) 
+
+
+survey_df_2 <- survey_df_2 %>% 
+    mutate_at(c(35,36,37,38,39,40,41), ~replace_na(.,0)) ## replacing NAs with 0
+
+```
+
+
+### Descriptive stats
+```{r}
+sum(survey_df_2$`North America`) ## 17 people
+sum(survey_df_2$`South Asia`) ## 23 people
+sum(survey_df_2$`Latin America & Caribbean`) ## 38 persons
+sum(survey_df_2$`Europe & Central Asia`) ## 43 individuals
+sum(survey_df_2$`East Asia & Pacific`) ## 3 individuals
+sum(survey_df_2$`Sub-Saharan Africa`) ## Only 1 person from African region
+sum(survey_df_2$`Middle East & North Africa`) ## 1 person from this region
+```
+
+### Dealing with current interation status
+```{r}
+survey_df_3 <- survey_df_2 %>%
+  mutate(current_is = case_when(
+    current_is_ng == "Interacting with other international students but hardly with Germans." ~ 1,
+    current_is_ng == "Interacting with students of all nationalities." ~ 1,
+    current_is_g == "Interacting with students of all nationalities, but primarily from developed countries" ~ 1,
+    current_is_g == "Interacting with students of all nationalities" ~ 1,
+    current_is_ng == "Mainly interacting with conationals and/or same region as me." ~ 0,
+    current_is_ng == "Mainly interacting with conationals and Germans." ~ 0,
+    current_is_ng == "" ~ 0,
+    current_is_g == "Mainly interacting with conationals and/or same region as me." ~ 0,
+    current_is_g == "Mainly interacting with conationals." ~ 0
+  ))
+
+
+sum(is.na(survey_df_3$current_is))
+
+
+survey_df_ci <- survey_df_3 %>%
+  group_by(current_is, treatment_status) %>%
+  summarise(willingness = rowMeans(across(outcome_1:outcome_10)))
+
+
+survey_df_ci_1 <- survey_df_ci %>%  ## Germans, non-Germans willingness
+  group_by(current_is, treatment_status) %>%
+  summarise(mean=round(mean(willingness)))
+
+survey_df_ci$current_is <- as.factor(survey_df_ci$current_is)
+survey_df_ci$treatment_status <- as.factor(survey_df_ci$treatment_status)
+
+
+
+
+plot_2 <- survey_df_ci %>% 
+  ggplot(
+    aes(x = current_is, y = willingness, fill = treatment_status)
+  ) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#FBBC05", "#34A853"), labels=c('Control', 'Treatment')) +
+  theme_bw() +
+  labs(
+ x = "Current interaction", 
+ y = "Willingness",
+ fill = "Group"
+ ) +
+  scale_x_discrete(labels = c("with Conationals/same Region", "with other nationalities"))
+
+plot_2
+```
+
+
+### Checking Control-Treatment Balance
+```{r}
+wilcox.test(willingness ~ treatment_status, data = survey_df_3)
+
+
+t.test(age ~ treatment_status, data = survey_df_3) #no difference
+t.test(abroad_exp ~ treatment_status, data = survey_df_3) #no difference
+t.test(work_exp ~ treatment_status, data = survey_df_3) #no difference
+t.test(german ~ treatment_status, data = survey_df_3) #no difference
+t.test(current_is ~ treatment_status, data = survey_df_3) #no difference
+t.test(willingness ~ treatment_status, data = survey_df_3) ## simple t-test doesn't show any difference
+
+```
+
+
+### Running regressions
+```{r}
+
+## Regressions
+model1 <- lm(willingness ~ treatment_status, 
+             data = survey_df_3)
+
+
+model2 <- lm(willingness ~ treatment_status 
+             + abroad_exp, 
+             data = survey_df_3)
+
+
+model3 <- lm(willingness ~ treatment_status 
+             + abroad_exp 
+             + current_is, 
+             data = survey_df_3)
+
+
+model4 <- lm(willingness ~ treatment_status 
+             + abroad_exp 
+             + current_is 
+             + living_sit,
+             data = survey_df_3)
+
+
+model5 <- lm(willingness ~ treatment_status 
+             + abroad_exp 
+             + current_is 
+             + `North America` 
+             + `South Asia` 
+             + `Latin America & Caribbean` 
+             + `Europe & Central Asia` 
+             + `East Asia & Pacific`,
+             data = survey_df_3)
+
+
+stargazer(model1, model2, model3, model4, model5, type = "text")
+```
